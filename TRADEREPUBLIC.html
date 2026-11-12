@@ -31,7 +31,7 @@ td small{color:var(--mut);display:block;font-size:11px}
 </style></head><body>
 <header><div class="row"><h1>TRADEREPUBLIC</h1><span class="sp"></span>
 <label class="btn">⬆ Importer<input id="f" type="file" multiple accept=".pdf,.csv" hidden></label>
-<button class="g" id="rf">⟳</button></div>
+<button class="g" id="rf">⟳</button><button class="g" id="gh" title="GitHub">⚙</button></div>
 <div class="kpis" id="kp"></div><div class="mut" id="st" style="margin-top:8px"></div></header>
 <div class="tabs" id="tb"></div><main id="mn"></main>
 <script>
@@ -153,12 +153,28 @@ function render(){
     if(s!=null){if(s.trim())S.map[i]=s.trim().toUpperCase();else delete S.map[i];delete live[i];save();refresh()}});
   document.getElementById("clr").onclick=()=>{if(confirm("Effacer tous les comptes importés ?")){S.acc={};save();render()}};
 }
-document.getElementById("f").onchange=async e=>{for(const f of e.target.files){try{const a=await(BROKER=="BD"?parseBD:parseTR)(f);if(!a){st("✔ Prix d’achat calculés depuis "+f.name);continue}
+async function importFiles(files){for(const f of files){try{const a=await(BROKER=="BD"?parseBD:parseTR)(f);if(!a){st("✔ Prix d’achat calculés depuis "+f.name);continue}
   a.label=(S.acc[a.id]&&S.acc[a.id].label)||(BROKER=="BD"?"Compte …"+a.id.slice(-4):"Trade Republic");S.acc[a.id]=a;st(`✔ ${f.name} importé (${a.pos.length} lignes)`)}catch(x){st("✖ "+f.name+" : "+x)}}
-  e.target.value="";save();render();refresh()};
+  save();render();refresh()}
+document.getElementById("f").onchange=async e=>{await importFiles([...e.target.files]);e.target.value=""};
 document.getElementById("rf").onclick=refresh;
 document.getElementById("mf").href=URL.createObjectURL(new Blob([JSON.stringify({name:"TRADEREPUBLIC",short_name:"TRADEREPUBLIC",display:"standalone",background_color:"#0f1720",theme_color:"#0f1720",start_url:location.href,icons:[{src:"data:image/svg+xml,"+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="20" fill="#ffffff"/><text x="50" y="66" font-size="44" text-anchor="middle" font-family="sans-serif" font-weight="bold">TR</text></svg>'),sizes:"any",type:"image/svg+xml"}]})],{type:"application/json"}));
-render();if(Object.keys(S.acc).length)refresh();
+const GK="gh_cfg";function ghc(){try{return JSON.parse(localStorage.getItem(GK))||{}}catch(e){return{}}}
+document.getElementById("gh").onclick=()=>{const c=ghc();const r=prompt("Dépôt privé (pseudo/nom) :",c.repo||"alertetradecrypto-GMAIL/PORTEFEUILLE-DATA");if(r==null)return;
+  const t=prompt("Clé d'accès GitHub (laisser vide pour garder l'actuelle) :","");try{localStorage.setItem(GK,JSON.stringify({repo:r.trim(),tok:(t&&t.trim())||c.tok}))}catch(e){}ghSync()};
+const bdDate=f=>{const m=f.match(/(\d\d)_(\d\d)_(\d{4})_(\d\d)_(\d\d)/);return m?m[3]+m[2]+m[1]+m[4]+m[5]:f};
+async function ghSync(){const c=ghc();if(!c.repo||!c.tok)return false;const H={Authorization:"Bearer "+c.tok};st("Lecture de GitHub…");
+  try{const r=await fetch(`https://api.github.com/repos/${c.repo}/contents/TRADEREPUBLIC`,{headers:H,cache:"no-store"});
+    if(!r.ok){st("✖ GitHub : "+(r.status==404?"dossier TRADEREPUBLIC ou dépôt introuvable":r.status==401?"clé invalide ou expirée":"erreur "+r.status));return false}
+    let L=(await r.json()).filter(x=>x.type=="file");
+    if("TRADEREPUBLIC"=="BOURSEDIRECT"){const b={};L.filter(x=>/\.xlsx$/i.test(x.name)).forEach(x=>{const id=(x.name.match(/(\d{8,})/)||[,x.name])[1];if(!b[id]||bdDate(x.name)>bdDate(b[id].name))b[id]=x});L=Object.values(b)}
+    else{const last=re=>L.filter(x=>re.test(x.name)).sort((a,b)=>a.name<b.name?1:-1)[0];L=[last(/\.csv$/i),last(/\.pdf$/i)].filter(Boolean)}
+    if(!L.length){st("Aucun fichier dans TRADEREPUBLIC/");return false}
+    const sig=L.map(x=>x.sha).join();if(sig==S.ghsig){st("GitHub : déjà à jour");refresh();return true}
+    const files=await Promise.all(L.map(async x=>new File([await(await fetch(x.url,{headers:{...H,Accept:"application/vnd.github.raw"}})).blob()],x.name)));
+    await importFiles(files);S.ghsig=sig;save();return true}catch(e){st("✖ GitHub inaccessible : "+e);return false}}
+render();ghSync().then(ok=>{if(!ok&&Object.keys(S.acc).length)refresh()});
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)ghSync()});
 timer=setInterval(()=>{if(!document.hidden&&Object.keys(S.acc).length)refresh()},60000);
 document.addEventListener("visibilitychange",()=>{if(!document.hidden&&Object.keys(S.acc).length)refresh()});
 </script></body></html>
