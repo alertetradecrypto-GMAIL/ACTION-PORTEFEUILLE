@@ -79,6 +79,18 @@ async function parseTR(file){if(/\.csv$/i.test(file.name))return parseTRcsv(file
   for(let p=1;p<=pdf.numPages;p++){const t=await(await pdf.getPage(p)).getTextContent();const g={};
     t.items.forEach(i=>{if(!i.str.trim())return;const y=Math.round(i.transform[5]/3);(g[y]=g[y]||[]).push(i)});
     Object.keys(g).sort((a,b)=>b-a).forEach(y=>L.push(g[y].sort((a,b)=>a.transform[4]-b.transform[4]).map(i=>i.str.trim()).join("  ")))}
+  const J=L.join("\n"),dk=d=>d.split("/").reverse().join("");
+  // Avis d'opération (achat/vente, crypto ou titres) : mouvement d'espèces
+  const rv=J.match(/RÉSERVATION[\s\S]*?(\d\d\.\d\d\.\d{4})\s+(-?[\d.]*\d,\d\d)\s*EUR/);
+  if(rv&&!/ÉTAT DU PATRIMOINE NET/.test(J)){const o=(J.match(/ORDRE\s+([\w-]+)/)||[,file.name])[1],d=rv[1].replace(/\./g,"/");
+    S.mv=S.mv||{};S.mv[o]={d:dk(d),a:n(rv[2].replace(/\./g,"")),t:(J.match(/POSITION[^\n]*\n([^\n]+?)\s{2}/)||[,""])[1]};
+    return{msg:`✔ Mouvement ${eur(S.mv[o].a)} du ${d} pris en compte`}}
+  // Relevé de compte : solde espèces de fin de période
+  const rc=J.match(/Compte courant\s+[\d.,]+\s*€\s+[\d.,]+\s*€\s+[\d.,]+\s*€\s+([\d.]*\d,\d\d)\s*€/),
+    rd=J.match(/DATE[^\n]*-\s*(\d{1,2})\s+([a-zéû]+)\.?\s+(\d{4})/);
+  if(rc&&rd){const M={janv:1,"févr":2,mars:3,avr:4,mai:5,juin:6,juil:7,"août":8,sept:9,oct:10,nov:11,"déc":12}[rd[2]];
+    const d=`${rd[1].padStart(2,"0")}/${String(M).padStart(2,"0")}/${rd[3]}`;S.ref={d:dk(d),a:n(rc[1].replace(/\./g,"")),lab:d};
+    return{msg:`✔ Relevé : espèces ${eur(S.ref.a)} au ${d}`}}
   const pos=[];let sec="CT",cash=0,date="";
   L.forEach((l,i)=>{
     if(/PORTEFEUILLE CRYPTO/.test(l))sec="CR";
@@ -128,7 +140,11 @@ function st(h){document.getElementById("st").innerHTML=h}
 /* ---------- UI ---------- */
 function calc(p){const L=live[p.isin],pe=L?L.eur:(p.price!=null?p.price*p.fxf:null),v=pe!=null?p.qty*pe:p.val,cost=p.pru!=null?p.pru*p.qty:null,
   chg=L&&L.chg!=null?L.chg:p.chg;return{pe,v,cost,pl:cost!=null?v-cost:null,plp:cost?v/cost-1:null,chg,day:chg!=null&&!isNaN(chg)?v-v/(1+chg):0,L}}
-function render(){
+/* Espèces = dernier solde connu (patrimoine ou relevé) + mouvements postérieurs */
+function applyCash(){const a=S.acc.TR;if(!a)return;const dk=d=>(d||"").split("/").reverse().join("");
+  if(a.cash0==null)a.cash0=a.cash||0;let r={d:dk(a.date),a:a.cash0};if(S.ref&&S.ref.d>r.d)r=S.ref;
+  a.cash=r.a+Object.values(S.mv||{}).filter(m=>m.d>r.d).reduce((s,m)=>s+m.a,0)}
+function render(){applyCash();
   const ids=Object.keys(S.acc),tb=document.getElementById("tb"),mn=document.getElementById("mn");
   if(!ids.length){tb.innerHTML="";document.getElementById("kp").innerHTML="";mn.innerHTML=`<div class="empty">Importez le PDF « État du patrimoine net »<br>(app Trade Republic → Profil → Documents / Relevés)<br>+ le CSV des transactions pour les prix d’achat.</div>`;return}
   if(cur!="ALL"&&!S.acc[cur])cur="ALL";
@@ -152,9 +168,11 @@ function render(){
   mn.querySelectorAll("th[data-s]").forEach(h=>h.onclick=()=>{sortK=h.dataset.s;render()});
   mn.querySelectorAll("tr[data-i]").forEach(t=>t.onclick=()=>{const i=t.dataset.i,s=prompt("Symbole Yahoo Finance pour "+i+" (vide = automatique) :",S.map[i]||"");
     if(s!=null){if(s.trim())S.map[i]=s.trim().toUpperCase();else delete S.map[i];delete live[i];save();refresh()}});
-  document.getElementById("clr").onclick=()=>{if(confirm("Effacer tous les comptes importés ?")){S.acc={};save();render()}};
+  document.getElementById("clr").onclick=()=>{if(confirm("Effacer tous les comptes importés ?")){S.acc={};S.mv={};S.ref=null;save();render()}};
 }
 async function importFiles(files){for(const f of files){try{const a=await(BROKER=="BD"?parseBD:parseTR)(f);if(!a){st("✔ Prix d’achat calculés depuis "+f.name);continue}
+  if(a.msg){st(a.msg);continue}
+  if(a.cash!=null)a.cash0=a.cash;const o=S.acc[a.id];if(o&&o.date&&a.date&&o.date.split("/").reverse().join("")>a.date.split("/").reverse().join("")){st("Patrimoine plus ancien ignoré : "+f.name);continue}
   a.label=(S.acc[a.id]&&S.acc[a.id].label)||(BROKER=="BD"?"Compte …"+a.id.slice(-4):"Trade Republic");S.acc[a.id]=a;st(`✔ ${f.name} importé (${a.pos.length} lignes)`)}catch(x){st("✖ "+f.name+" : "+x)}}
   save();render();refresh()}
 document.getElementById("f").onchange=async e=>{await importFiles([...e.target.files]);e.target.value=""};
@@ -170,7 +188,7 @@ async function ghSync(){const c=ghc();if(!c.repo||!c.tok)return false;const H={A
     if(!r.ok){st("✖ GitHub : "+(r.status==404?"dossier TRADEREPUBLIC ou dépôt introuvable":r.status==401?"clé invalide ou expirée":"erreur "+r.status));return false}
     let L=(await r.json()).filter(x=>x.type=="file");
     if("TRADEREPUBLIC"=="BOURSEDIRECT"){const b={};L.filter(x=>/\.xlsx$/i.test(x.name)).forEach(x=>{const id=(x.name.match(/(\d{8,})/)||[,x.name])[1];if(!b[id]||bdDate(x.name)>bdDate(b[id].name))b[id]=x});L=Object.values(b)}
-    else{const last=re=>L.filter(x=>re.test(x.name)).sort((a,b)=>a.name<b.name?1:-1)[0];L=[last(/\.csv$/i),last(/\.pdf$/i)].filter(Boolean)}
+    else{const last=re=>L.filter(x=>re.test(x.name)).sort((a,b)=>a.name<b.name?1:-1)[0];L=[last(/\.csv$/i),...L.filter(x=>/\.pdf$/i.test(x.name))].filter(Boolean)}
     if(!L.length){st("Aucun fichier dans TRADEREPUBLIC/");return false}
     const sig=L.map(x=>x.sha).join();if(sig==S.ghsig){st("GitHub : déjà à jour");refresh();return true}
     const files=await Promise.all(L.map(async x=>new File([await(await fetch(x.url,{headers:{...H,Accept:"application/vnd.github.raw"}})).blob()],x.name)));
