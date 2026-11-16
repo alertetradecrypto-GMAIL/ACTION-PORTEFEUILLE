@@ -22,7 +22,7 @@ main{padding:12px 16px 40px}
 table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden}
 th,td{padding:9px 8px;border-bottom:1px solid var(--line);text-align:right;white-space:nowrap}
 th{color:var(--mut);font-weight:500;font-size:12px;cursor:pointer}th:first-child,td:first-child{text-align:left;white-space:normal}
-td small{color:var(--mut);display:block;font-size:11px}
+a.tv{color:inherit;text-decoration:none}.ed{color:var(--mut);cursor:pointer;padding:0 4px}#kc{cursor:pointer}td small{color:var(--mut);display:block;font-size:11px}
 .up{color:var(--up)}.dn{color:var(--dn)}.mut{color:var(--mut);font-size:12px}
 .wrap{overflow-x:auto;border-radius:12px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;background:var(--mut)}.dot.live{background:var(--up)}
@@ -46,14 +46,20 @@ const cl=v=>v>0?"up":v<0?"dn":"";
 
 /* ---------- PARSERS ---------- */
 async function parseBD(file){
-  const z=await JSZip.loadAsync(file);const xml=await z.file("xl/worksheets/sheet1.xml").async("string");
-  const d=new DOMParser().parseFromString(xml,"text/xml");const rows=[...d.getElementsByTagName("row")].map(r=>[...r.getElementsByTagName("c")].map(c=>c.textContent.trim()));
+  const z=await JSZip.loadAsync(file);const sx=z.file("xl/sharedStrings.xml"),ss=sx?[...new DOMParser().parseFromString(await sx.async("string"),"text/xml").getElementsByTagName("si")].map(x=>x.textContent.trim()):[];const xml=await z.file("xl/worksheets/sheet1.xml").async("string");
+  const d=new DOMParser().parseFromString(xml,"text/xml");const rows=[...d.getElementsByTagName("row")].map(r=>[...r.getElementsByTagName("c")].map(c=>c.getAttribute("t")=="s"?ss[+c.textContent]:c.textContent.trim()));
   const h=rows.shift();const ix=k=>h.findIndex(x=>x.startsWith(k));
   const id=(file.name.match(/(\d{8,})/)||[,file.name])[1];
   const pos=rows.filter(r=>r[ix("ISIN")]).map(r=>{const q=n(r[ix("Quantit")]),p=n(r[ix("Cours")]),v=n(r[ix("Valorisation")]);
     return{name:r[ix("Nom")],isin:r[ix("ISIN")],qty:q,price:p,cur:r[ix("Devise")],pru:n(r[ix("PRU")]),val:v,fxf:q*p?v/(q*p):1,chg:n(r[ix("Variation")]),mic:r[ix("MIC")]}});
+  let cash=null;
+  for(const fn of Object.keys(z.files).filter(x=>/^xl\/worksheets\/sheet\d+\.xml$/.test(x))){
+    const dx=new DOMParser().parseFromString(await z.file(fn).async("string"),"text/xml");
+    [...dx.getElementsByTagName("row")].forEach(r=>{const c=[...r.getElementsByTagName("c")].map(x=>x.getAttribute("t")=="s"?ss[+x.textContent]:x.textContent.trim());
+      if(cash==null&&c.some(x=>/esp[eè]ces|liquidit|solde|disponible/i.test(x||""))&&!c.some(x=>/^[A-Z]{2}[A-Z0-9]{9}\d$/.test(x||""))){
+        const v=c.map(x=>n(x)).filter(x=>!isNaN(x));if(v.length)cash=v[v.length-1]}})}
   const dm=file.name.match(/(\d\d)_(\d\d)_(\d{4})/);
-  return{id,date:dm?`${dm[1]}/${dm[2]}/${dm[3]}`:new Date().toLocaleDateString("fr-FR"),pos,cash:null};
+  return{id,date:dm?`${dm[1]}/${dm[2]}/${dm[3]}`:new Date().toLocaleDateString("fr-FR"),pos,cash};
 }
 async function parseTR(file){
   pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
@@ -83,6 +89,10 @@ let pIdx=+(localStorage.getItem("pidx")||0);
 async function gj(u){for(let k=0;k<PROX.length;k++){const i=(pIdx+k)%PROX.length;
   try{const r=await fetch(PROX[i](u),{cache:"no-store"});if(!r.ok)continue;const j=await r.json();if(pIdx!=i){pIdx=i;try{localStorage.setItem("pidx",i)}catch(e){}}return j}catch(e){}}return null}
 const SUF={XPAR:".PA",XBRU:".BR",XAMS:".AS",XETR:".DE",XMIL:".MI",XMAD:".MC",XLIS:".LS",XSWX:".SW",XLON:".L"};
+const TVX={XPAR:"EURONEXT",XBRU:"EURONEXT",XAMS:"EURONEXT",XLIS:"EURONEXT",XETR:"XETR",XMIL:"MIL",XMAD:"BME",XSWX:"SIX",XLON:"LSE",XNYS:"NYSE",XNAS:"NASDAQ"};
+const TVS={PA:"EURONEXT",BR:"EURONEXT",AS:"EURONEXT",LS:"EURONEXT",DE:"XETR",F:"FWB",MI:"MIL",MC:"BME",SW:"SIX",L:"LSE"};
+function tv(p){const y=S.map[p.isin]||(live[p.isin]&&live[p.isin].s);let t=y?y.split(".")[0]:p.isin,x=y&&y.includes(".")?TVS[y.split(".").pop()]:TVX[p.mic];
+  if(p.crypto){t=p.isin+"EUR";x="BITSTAMP"}return"https://fr.tradingview.com/chart/?symbol="+encodeURIComponent(x?x+":"+t:t)}
 async function sym(p){if(S.map[p.isin])return S.map[p.isin];
   const j=await gj("https://query2.finance.yahoo.com/v1/finance/search?quotesCount=10&newsCount=0&q="+p.isin);
   const q=(j&&j.quotes||[]).filter(x=>x.symbol);if(!q.length)return null;
@@ -116,27 +126,29 @@ function render(){
   tb.innerHTML=(ids.length>1?`<div class="tab ${cur=="ALL"?"on":""}" data-a="ALL">Tous</div>`:"")+ids.map(i=>`<div class="tab ${cur==i||ids.length==1?"on":""}" data-a="${i}">${S.acc[i].label||i}</div>`).join("");
   tb.querySelectorAll(".tab").forEach(t=>{t.onclick=()=>{cur=t.dataset.a;render()};t.ondblclick=()=>{const a=S.acc[t.dataset.a];if(!a)return;const l=prompt("Nom du compte (ex. PEA, CTO) :",a.label||"");if(l!=null){a.label=l;save();render()}}});
   const sel=cur=="ALL"||ids.length==1?ids:[cur];let rows=[],cash=0,dates=[];
-  sel.forEach(i=>{const a=S.acc[i];cash+=a.cash||0;dates.push(a.date);a.pos.forEach(p=>rows.push({...p,acc:a.label||i,...calc(p)}))});
+  sel.forEach(i=>{const a=S.acc[i];cash+=(a.cash!=null?a.cash:a.cashM)||0;dates.push(a.date);a.pos.forEach(p=>rows.push({...p,acc:a.label||i,...calc(p)}))});
   const T=rows.reduce((s,r)=>{s.v+=r.v||0;if(r.cost!=null){s.c+=r.cost;s.vc+=r.v}s.d+=r.day||0;return s},{v:0,c:0,vc:0,d:0});
   const k=(t,v,c="")=>`<div class="k"><small>${t}</small><b class="${c}">${v}</b></div>`;
-  document.getElementById("kp").innerHTML=k("Valeur titres",eur(T.v))+(cash?k("Espèces",eur(cash))+k("Total",eur(T.v+cash)):"")+
+  document.getElementById("kp").innerHTML=k("Valeur titres",eur(T.v))+`<div class="k" id="kc" title="Tap pour saisir les espèces si le fichier ne les contient pas"><small>Espèces</small><b>${eur(cash)}</b></div>`+k("Total",eur(T.v+cash))+
     (T.c?k("+/- latente",eur(T.vc-T.c)+` <small class="${cl(T.vc-T.c)}">${pc(T.vc/T.c-1)}</small>`,cl(T.vc-T.c)):"")+k("Variation du jour",eur(T.d),cl(T.d));
   const S2={v:r=>-(r.v||0),n:r=>r.name,pl:r=>-(r.plp??-9),j:r=>-(r.chg??-9)}[sortK];rows.sort((a,b)=>{const x=S2(a),y=S2(b);return x<y?-1:x>y?1:0});
   const hasPru=rows.some(r=>r.pru!=null);
-  mn.innerHTML=`<p class="mut">Fichier(s) du ${[...new Set(dates)].join(", ")} · double-tap sur un onglet pour le renommer · tap sur une ligne pour corriger le symbole</p>
+  mn.innerHTML=`<p class="mut">Fichier(s) du ${[...new Set(dates)].join(", ")} · double-tap sur un onglet pour le renommer · tap sur une ligne = graphique TradingView · ✎ = corriger le symbole</p>
   <div class="wrap"><table><tr><th data-s="n">Titre</th><th class="hm">Qté</th><th>Cours €</th><th data-s="j">Jour</th><th data-s="v">Valeur</th>${hasPru?'<th data-s="pl">+/-</th>':""}<th class="hm">Poids</th></tr>
-  ${rows.map(r=>`<tr data-i="${r.isin}"><td>${r.name}<small>${r.L?'<span class="dot live"></span>'+(r.L.s||r.isin):r.isin}${sel.length>1?" · "+r.acc:""}</small></td>
+  ${rows.map(r=>`<tr data-i="${r.isin}"><td><a class="tv" href="${tv(r)}" target="_blank" rel="noopener">${r.name}</a> <span class="ed" title="Corriger le symbole">✎</span><small>${r.L?'<span class="dot live"></span>'+(r.L.s||r.isin):r.isin}${sel.length>1?" · "+r.acc:""}</small></td>
   <td class="hm">${+r.qty.toFixed(6)}</td><td>${r.pe!=null?r.pe.toLocaleString("fr-FR",{maximumFractionDigits:r.pe<10?4:2}):"–"}</td>
   <td class="${cl(r.chg)}">${pc(r.chg)}</td><td>${eur(r.v)}</td>${hasPru?`<td class="${cl(r.pl)}">${r.pl!=null?eur(r.pl)+`<small>${pc(r.plp)}</small>`:"–"}</td>`:""}
   <td class="hm">${T.v?(r.v/T.v*100).toFixed(1)+" %":""}</td></tr>`).join("")}</table></div>
   <p><button class="g" id="clr">Effacer les données</button></p>`;
+  document.getElementById("kc").onclick=()=>{sel.forEach(i=>{const a=S.acc[i];if(a.cash!=null){alert((a.label||i)+" : espèces lues dans le fichier ("+eur(a.cash)+")");return}
+    const v=prompt("Espèces — "+(a.label||i)+" (€) :",a.cashM!=null?String(a.cashM).replace(".",","):"");if(v!=null){a.cashM=v.trim()?n(v):null;save()}});render()};
   mn.querySelectorAll("th[data-s]").forEach(h=>h.onclick=()=>{sortK=h.dataset.s;render()});
-  mn.querySelectorAll("tr[data-i]").forEach(t=>t.onclick=()=>{const i=t.dataset.i,s=prompt("Symbole Yahoo Finance pour "+i+" (vide = automatique) :",S.map[i]||"");
+  mn.querySelectorAll("tr[data-i]").forEach(t=>t.onclick=e=>{if(e.target.closest("a"))return;if(!e.target.closest(".ed")){window.open(t.querySelector("a.tv").href,"_blank");return}const i=t.dataset.i,s=prompt("Symbole Yahoo Finance pour "+i+" (vide = automatique) :",S.map[i]||"");
     if(s!=null){if(s.trim())S.map[i]=s.trim().toUpperCase();else delete S.map[i];delete live[i];save();refresh()}});
   document.getElementById("clr").onclick=()=>{if(confirm("Effacer tous les comptes importés ?")){S.acc={};save();render()}};
 }
 async function importFiles(files){for(const f of files){try{const a=await(BROKER=="BD"?parseBD:parseTR)(f);
-  a.label=(S.acc[a.id]&&S.acc[a.id].label)||(BROKER=="BD"?"Compte …"+a.id.slice(-4):"Trade Republic");S.acc[a.id]=a;st(`✔ ${f.name} importé (${a.pos.length} lignes)`)}catch(x){st("✖ "+f.name+" : "+x)}}
+  a.label=(S.acc[a.id]&&S.acc[a.id].label)||(BROKER=="BD"?"Compte …"+a.id.slice(-4):"Trade Republic");if(S.acc[a.id]&&S.acc[a.id].cashM!=null)a.cashM=S.acc[a.id].cashM;S.acc[a.id]=a;st(`✔ ${f.name} importé (${a.pos.length} lignes)`)}catch(x){st("✖ "+f.name+" : "+x)}}
   save();render();refresh()}
 document.getElementById("f").onchange=async e=>{await importFiles([...e.target.files]);e.target.value=""};
 document.getElementById("rf").onclick=refresh;
